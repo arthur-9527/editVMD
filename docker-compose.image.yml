@@ -1,0 +1,56 @@
+# editVMD 镜像部署（不需要源码 / 模型资产，开箱即用）
+#
+#   cp .env.example .env
+#   docker compose -f docker-compose.image.yml up -d
+#   打开 http://localhost:8200
+#
+# 镜像内置动作 / 表情生成模型（约 665MB），首次会拉取约 1GB。
+# 模型与动作库的使用条款见 ASSETS-LICENSE.md。
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: editvmd-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: editvmd
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-editvmd}
+      POSTGRES_DB: editvmd
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U editvmd -d editvmd"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: ghcr.io/arthur-9527/editvmd:latest
+    container_name: editvmd-app
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      EDITVMD_DATABASE_URL: postgresql+psycopg2://editvmd:${POSTGRES_PASSWORD:-editvmd}@db:5432/editvmd
+      EDITVMD_STORAGE: /data/storage
+      EDITVMD_AI_WORKDIR: /data/storage/ai_workspace
+    volumes:
+      - ./storage:/data/storage
+      - claude_cfg:/app/backend/.claude
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8200/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  pgdata:
+  claude_cfg:
