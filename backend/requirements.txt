@@ -1,0 +1,52 @@
+# editVMD 后端依赖
+#
+# ★ 版本对齐本机已安装的版本（系统 Python 受 PEP 668 管理，
+#   且本机访问 PyPI 不通，无法 pip 安装新包；这些包本机已预装）：
+#     fastapi 0.109.0 / uvicorn 0.27.0 / SQLAlchemy 2.0.50 /
+#     psycopg2-binary 2.9.12 / pydantic-settings 2.12.0
+#
+# ★ 不用 python-multipart：本机没有该包且装不上。
+#   所有上传接口都改成「原始字节 / JSON base64」，不依赖 multipart 解析。
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# 数据库（PostgreSQL）
+sqlalchemy==2.0.50
+psycopg2-binary==2.9.12
+# 配置读取（环境变量 / .env）
+pydantic-settings==2.12.0
+
+# 侧边栏 AI（claude-agent-sdk，见 scripts/setup-ai.sh）
+# ★ 锁定 0.2.93，不要升级：
+#   - 0.2.93 自带 bundled CLI（_bundled/claude = 2.1.167），无需外部 claude；
+#     且该 CLI 尚未引入官方模型白名单。
+#   - 从 0.2.187 起 CLI 会对「疑似官方端点」校验模型名，
+#     deepseek-* 等非 claude 模型会报 claude-code:unrecognized_model
+#     （见 backend/app/ai/options.py 顶部说明）。
+# ★ claude-agent-sdk 不写进本文件（否则 pip 完整解析必失败）：
+#   它依赖 mcp>=1.23，而 mcp 要求 uvicorn>=0.31.1；本项目锁 uvicorn==0.27.0
+#   （fastapi 0.109 兼容），两者冲突 → ResolutionImpossible。
+#   安装方式：scripts/setup-ai.sh（本机）或 backend/Dockerfile（容器），
+#   都是 --no-deps 装 SDK / mcp，再手动补齐 mcp 的运行期依赖。
+# claude-agent-sdk==0.2.93
+python-dotenv>=1.0.0
+
+# ---------------------------------------------------------------- 动作生成模型
+# 进程内嵌的 text2motion 推理栈（backend/app/motiongen/）。
+# torch-free：只靠 onnxruntime（int8 bge-large）+ tokenizers + numpy/scipy。
+# ★ 若本机 pip 不通，可从 text2motion 的 .venv 直接复制这些包到
+#   backend/.venv/lib/python3.12/site-packages/（同 Python 3.12、ABI 一致）。
+onnxruntime==1.32.0
+tokenizers==0.23.3
+
+# ---------------------------------------------------------------- 媒体（视频 → 动作）
+# 参考视频 / 文本生成动作的动捕客户端（backend/app/media/animchar.py）。
+# MiniMax i2v 用标准库 urllib；glb2vmd 已内嵌（backend/app/media/glb2vmd_core/）。
+requests>=2.31.0
+
+# ★ glb2vmd 内嵌转换器（Mixamo .glb → MMD .vmd）的依赖：
+#   glb_reader 用 pygltflib 读 .glb；pmx_reader / vmd_writer 用 pymeshio 读 .pmx、写 .vmd。
+#   ★ 本机 pip 不通时，从 ~/raspi_mmd/glb2vmd/.venv 复制这两个包到
+#     backend/.venv/lib/python3.12/site-packages/（同 Python 3.12、ABI 一致）。
+pygltflib==1.16.5
+pymeshio==3.0.1

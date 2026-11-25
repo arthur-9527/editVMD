@@ -1,0 +1,38 @@
+# editVMD Docker 构建上下文
+#
+# ★ 模型数据（backend/app/motiongen/data、expressiongen/data）**不要排除**：
+#   本地部署镜像需要把它们内置进去，才能开箱即用。
+#   只有下面这些「源码/运行期产物」才排除。
+
+.git
+.gitignore
+.dockerignore
+.env
+
+# Python
+**/__pycache__
+**/*.pyc
+backend/.venv
+backend/.sdk-backup
+backend/.claude
+backend/.env
+backend/*.log
+
+# Node
+frontend/node_modules
+frontend/dist
+
+# 运行期数据
+storage
+pgdata
+.run
+
+# 第三方参考源码副本（reze-studio GPL-3.0 等，禁止进入镜像）
+temp
+
+# 私有资产包（如使用外挂资产时）
+assets
+
+# 文档与说明（运行时不需要）
+docs
+README.md

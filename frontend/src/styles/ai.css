@@ -1,0 +1,172 @@
+/**
+ * 侧边栏 AI 的 Markdown 排版（`.ai-md`）。
+ *
+ * 之前项目里**完全没有**这个样式，Markdown 渲染出来是裸的 <p>/<pre>，
+ * 段间距、代码块底色、引用条都没有 —— 这是侧边栏观感差的一大原因。
+ *
+ * 配色全部取 tokens.css 里的变量（surface / raised / line / dim / faint /
+ * accent / warn），不引入参考项目的紫色体系，保证与编辑器其余部分一致。
+ */
+
+.ai-md > :first-child {
+  margin-top: 0;
+}
+
+.ai-md > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-md p {
+  margin: 0.4em 0;
+}
+
+.ai-md h1,
+.ai-md h2,
+.ai-md h3,
+.ai-md h4 {
+  margin: 0.9em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+}
+
+.ai-md h1 {
+  font-size: 14px;
+}
+.ai-md h2 {
+  font-size: 13px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+}
+.ai-md h3 {
+  font-size: 12.5px;
+}
+.ai-md h4 {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.ai-md ul,
+.ai-md ol {
+  margin: 0.4em 0;
+  padding-left: 1.35em;
+}
+
+.ai-md li {
+  margin: 0.15em 0;
+}
+
+.ai-md li::marker {
+  color: var(--faint);
+}
+
+.ai-md strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ai-md em {
+  color: var(--dim);
+}
+
+.ai-md del {
+  color: var(--faint);
+}
+
+.ai-md a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgb(10 132 255 / 0.35);
+  transition: border-color 0.15s ease;
+}
+
+.ai-md a:hover {
+  border-bottom-color: rgb(10 132 255 / 0.8);
+}
+
+.ai-md code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--radius-chip);
+  background: rgb(255 255 255 / 0.08);
+  color: var(--fg);
+}
+
+.ai-md pre {
+  margin: 0.5em 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: rgb(0 0 0 / 0.28);
+  overflow: auto;
+  max-height: 360px;
+}
+
+.ai-md pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.ai-md blockquote {
+  margin: 0.5em 0;
+  padding: 4px 10px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
+  background: rgb(255 159 10 / 0.07);
+  color: var(--dim);
+}
+
+.ai-md blockquote p {
+  margin: 0.15em 0;
+}
+
+.ai-md hr {
+  margin: 0.8em 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.ai-md table {
+  width: 100%;
+  margin: 0.5em 0;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.ai-md th,
+.ai-md td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.ai-md th {
+  color: var(--faint);
+  font-weight: 600;
+  background: rgb(255 255 255 / 0.04);
+}
+
+.ai-md td {
+  color: var(--dim);
+}
+
+/* ============================================================
+ * 输入框：只保留外层容器的一条边框
+ *
+ * ★ 之前出现「双层蓝框」的原因：
+ *   base.css 里的全局 `:focus-visible { outline: 2px solid var(--accent) }`
+ *   在 index.css 中排在 Tailwind 之后，会覆盖 textarea 上的 `outline-none`，
+ *   于是内层 textarea 又画了一圈 outline，与外层容器的 focus-within 边框叠在一起。
+ *   这里显式归零，聚焦态只由 `.ai-composer` 容器的边框表达。
+ * ============================================================ */
+.ai-composer textarea,
+.ai-composer textarea:hover,
+.ai-composer textarea:focus,
+.ai-composer textarea:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}

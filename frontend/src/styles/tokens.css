@@ -1,0 +1,77 @@
+/**
+ * 设计令牌 —— macOS 暗色专业编辑器。
+ *
+ * 命名沿用「ground / surface / line」体系：
+ *   ground  窗口底（卡片缝隙露出的那一层）
+ *   surface 面板卡片自身的填充
+ *   raised  叠在卡片之上的东西（菜单、弹窗、输入框、分段控件槽）
+ *   line    同一表面内部的分隔线
+ *   line-strong 表面与外部之间的边界
+ *
+ * 只做深色主题：color-scheme: dark 写死在 :root。
+ */
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-fg: var(--fg);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono",
+    Consolas, monospace;
+
+  --radius-card: 10px;
+  --radius-ctl: 6px;
+  --radius-chip: 4px;
+
+  --shadow-float: 0 20px 50px -12px rgb(0 0 0 / 0.7),
+    0 8px 20px -8px rgb(0 0 0 / 0.55);
+  --shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.04) inset;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* —— 表面 —— */
+  --ground: #1b1b1d;
+  --surface: #232326;
+  --raised: #2c2c30;
+
+  /* —— 边界 —— */
+  --line: rgb(255 255 255 / 0.07);
+  --line-strong: rgb(255 255 255 / 0.12);
+
+  /* —— 文本三级 —— */
+  --fg: #f2f2f4;
+  --dim: #a1a1a8;
+  --faint: #6e6e76;
+
+  /* —— 三色语义（一个颜色一个含义） —— */
+  --accent: #0a84ff; /* 选中 / 激活 / 焦点 */
+  --accent-soft: rgb(10 132 255 / 0.16);
+  --warn: #ff9f0a; /* 警告：还能用，但要注意 */
+  --danger: #ff453a; /* 破坏性：会删掉东西 */
+  --ok: #30d158; /* 就绪 / 正常 */
+
+  /* —— 视口背景（比卡片更深，让 3D 画面沉下去） —— */
+  --viewport-bg: #131315;
+
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}

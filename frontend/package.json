@@ -1,0 +1,49 @@
+{
+  "name": "editvmd-frontend",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.24.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test:vmd": "node --experimental-strip-types --test tests/vmd-roundtrip.test.mts",
+    "test:ops": "node --experimental-strip-types --test tests/clip-ops.test.mts",
+    "test:camera": "node --experimental-strip-types --test tests/vmd-camera.test.mts",
+    "test:platform": "node --experimental-strip-types --test tests/platform.test.mts",
+    "test": "node --experimental-strip-types --test tests/*.test.mts",
+    "test:anim": "node --experimental-strip-types --test tests/animation-simplify.test.mts",
+    "test:project": "node --experimental-strip-types --test tests/project-bake.test.mts",
+    "test:draft": "node --experimental-strip-types --test tests/draft.test.mts",
+    "test:name": "node --experimental-strip-types --test tests/vmd-name.test.mts",
+    "test:ai": "node --experimental-strip-types --test tests/ai-markdown.test.mts"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.77.0",
+    "radix-ui": "^1.8.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "reze-engine": "^0.70.6",
+    "tailwind-merge": "^3.7.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "@webgpu/types": "^0.1.74",
+    "tailwindcss": "^4.3.5",
+    "tw-animate-css": "^1.4.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,131 @@
+/**
+ * 原生控件的跨浏览器外观。
+ * 只放无法用 Tailwind 原子类表达的部分（伪元素）。
+ */
+
+/* —— 滑块：3px 轨道 + 12px 圆滑块 —— */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  outline: none;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.14);
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: #f2f2f4;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.5),
+    0 0 0 0.5px rgb(0 0 0 / 0.3);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.slider:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+
+.slider:active::-webkit-slider-thumb {
+  transform: scale(0.94);
+}
+
+.slider:disabled::-webkit-slider-thumb {
+  background: rgb(255 255 255 / 0.35);
+  cursor: not-allowed;
+}
+
+.slider::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.14);
+}
+
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #f2f2f4;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+  cursor: pointer;
+}
+
+/* —— 搜索框：去掉 WebKit 自带清除按钮，交给调用方 —— */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* —— 拖动中的全局光标：由 useSplit 在 <html> 上切换 —— */
+html.is-resizing-row,
+html.is-resizing-row * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+html.is-resizing-col,
+html.is-resizing-col * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* —— 轴滑块（属性检查器）：透明轨道，滑块用轴色 —— */
+.axis-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  outline: none;
+}
+
+.axis-slider::-webkit-slider-runnable-track {
+  height: 18px;
+  background: transparent;
+}
+
+.axis-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--axis-color, #f2f2f4);
+  border: 1.5px solid var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+  cursor: grab;
+}
+
+.axis-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+
+.axis-slider:disabled::-webkit-slider-thumb {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.axis-slider::-moz-range-track {
+  height: 18px;
+  background: transparent;
+}
+
+.axis-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--surface);
+  border-radius: 50%;
+  background: var(--axis-color, #f2f2f4);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+  cursor: grab;
+}

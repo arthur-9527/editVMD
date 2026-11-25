@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+
+# 运行时 PID
+.run/
+.dev-ports
+
+# 运行期产物
+assets/uploads/
+backend/*.log
+*.log
+
+# 存储根（上传的模型 / VMD / 系统生成物）
+storage/
+# Postgres 本地数据目录（若不用命名卷）
+pgdata/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+
+# 参考项目 / 临时拷贝
+# temp/ 下可能存放 reze-studio（GPL-3.0）等第三方源码副本，
+# 仅作阅读参考，绝不能进入本仓库的版本历史。
+temp/
+
+# 侧边栏 AI：本地密钥与工作目录
+backend/.env
+backend/.claude/
+storage/ai_workspace/
+
+# SDK 版本回退时的本地备份（含 bundled CLI，体积很大，不入库）
+backend/.sdk-backup/
+
+# 动作生成模型的数据与权重（343MB，二进制，不入库）
+# 需要时从 text2motion 复制，见 backend/app/motiongen/README
+backend/app/motiongen/data/
+# 动作生成引擎运行期落盘目录（config.OUTPUT_DIR，未被本集成使用）
+backend/app/motiongen/output/
+
+# 表情生成模型的数据与权重（约 320MB，二进制，不入库）
+# 需要时从 text2motion 复制，见 backend/app/expressiongen/README
+backend/app/expressiongen/data/
+
+# 私有资产包（模型 / 动作库，走 Release 或官方镜像分发，不入库）
+/assets/
+*.tar.zst
+
+# 根目录 Docker 配置（含 API Key）
+/.env
+
+# 本地 compose 覆盖
+docker-compose.override.yml
+
+# 内部文档（技术细节，不公开；仅本地保留，也不进镜像）
+docs/

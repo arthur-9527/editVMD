@@ -1,0 +1,69 @@
+# editVMD 本地部署（单容器 + Postgres）
+#
+#   cp backend/.env.example backend/.env     # 按需填 EDITVMD_AI_API_KEY
+#   docker compose up -d --build
+#   打开 http://localhost:8200
+#
+# ★ 单容器形态：后端 FastAPI 直接托管前端 dist，页面与 /api 同源，
+#   WebSocket（/api/ai/ws）无需反向代理。
+#
+# ★ db 的 55432 端口只为本机 `bash scripts/dev.sh` 开发保留；
+#   纯部署环境可以删掉该 ports 映射。
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: editvmd-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: editvmd
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-editvmd}
+      POSTGRES_DB: editvmd
+      # 中文 / 日文骨骼名要按字符比较，统一 UTF8
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U editvmd -d editvmd"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: editvmd-app
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    # ★ 只放 Key（AI / Metaso / AnimChar）；路径统一由下面 environment 覆盖
+    #   模板见仓库根目录的 .env.example（与 docker-compose.yml 同目录）
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      # 容器内直连 db 服务（5432），不走宿主机映射端口
+      EDITVMD_DATABASE_URL: postgresql+psycopg2://editvmd:${POSTGRES_PASSWORD:-editvmd}@db:5432/editvmd
+      EDITVMD_STORAGE: /data/storage
+      EDITVMD_AI_WORKDIR: /data/storage/ai_workspace
+    volumes:
+      # ★ 绑定到仓库下的 ./storage：文件可见、可备份，与 dev.sh 共用同一份数据
+      - ./storage:/data/storage
+      - claude_cfg:/app/backend/.claude
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8200/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  pgdata:
+  claude_cfg:
+
