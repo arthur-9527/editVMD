@@ -38,6 +38,7 @@ services:
       EDITVMD_DATABASE_URL: postgresql+psycopg2://editvmd:${POSTGRES_PASSWORD:-editvmd}@db:5432/editvmd
       EDITVMD_STORAGE: /data/storage
       EDITVMD_AI_WORKDIR: /data/storage/ai_workspace
+      IS_SANDBOX: "1"
     volumes:
       - ./storage:/data/storage
       - claude_cfg:/app/backend/.claude

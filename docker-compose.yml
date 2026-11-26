@@ -49,6 +49,7 @@ services:
       EDITVMD_DATABASE_URL: postgresql+psycopg2://editvmd:${POSTGRES_PASSWORD:-editvmd}@db:5432/editvmd
       EDITVMD_STORAGE: /data/storage
       EDITVMD_AI_WORKDIR: /data/storage/ai_workspace
+      IS_SANDBOX: "1"
     volumes:
       # ★ 绑定到仓库下的 ./storage：文件可见、可备份，与 dev.sh 共用同一份数据
       - ./storage:/data/storage
