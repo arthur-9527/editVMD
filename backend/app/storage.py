@@ -117,57 +117,122 @@ def delete_vmd(rel_path: str) -> None:
         path.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------- 参考视频
+# ---------------------------------------------------------------- 视频捕捉（参考视频 → 动作）
+#
+# 目录布局（与 AI 会话目录彻底分开）：
+#     storage/media/capture/videos/<id>.mp4    参考视频窗口上传的视频
+#     storage/media/capture/actions/<id>.vmd   视频捕捉生成的动作（旁挂，只进动作库 L2）
+#
+# AI 生成的视频与动作在 storage/ai_workspace/<session_id>/ai_videos/，
+# 由下面的 ai_video_* 函数管理，**不经过这里**。
 
-def video_rel_path(asset_id: str) -> str:
+# ---- 视频捕捉：视频 ----
+
+def capture_video_rel_path(asset_id: str) -> str:
     """相对 storage 根的路径，落库用。"""
-    return f"media/videos/{asset_id}.mp4"
+    return f"media/capture/videos/{asset_id}.mp4"
 
 
-def video_path(asset_id: str) -> Path:
-    return settings.media_videos_dir / f"{asset_id}.mp4"
+def capture_video_path(asset_id: str) -> Path:
+    return settings.capture_videos_dir / f"{asset_id}.mp4"
 
 
-def write_video(asset_id: str, data: bytes) -> Path:
-    path = video_path(asset_id)
+def write_capture_video(asset_id: str, data: bytes) -> Path:
+    path = capture_video_path(asset_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return path
 
 
-# ---- 视频旁挂的 VMD（能力2：视频→动作的产物）----
+# ---- 视频捕捉：生成的动作（旁挂 VMD） ----
 #
 # ★ 三级缓存语义：这份 VMD 是「生成物」，**只应进动作库（L2）**，
 #   不该写进 storage/vmd（那是用户显式存盘的 L3 冷数据）。
-#   但视频转换发生在后端进程内、前端只轮询 status，所以把产物**旁挂**在视频
-#   旁边（同目录同一 id），既不污染 vmd/ 存盘区、又能被前端按 video_id 拉走。
+#   但视频转换发生在后端进程内、前端只轮询 status，所以把产物**旁挂**在
+#   capture/actions 下，既不污染 vmd/ 存盘区、又能被前端按 video_id 拉走。
 #   前端拿到字节后 parseVmd → 动作库（显示「未存盘」），只有用户手动存盘才进 L3。
 
 
-def video_vmd_rel_path(asset_id: str) -> str:
-    """视频旁挂 VMD 相对 storage 根的路径，落库 / 删除时用。"""
-    return f"media/videos/{asset_id}.vmd"
+def capture_action_rel_path(asset_id: str) -> str:
+    """视频捕捉生成动作相对 storage 根的路径。"""
+    return f"media/capture/actions/{asset_id}.vmd"
 
 
-def video_vmd_path(asset_id: str) -> Path:
-    return settings.media_videos_dir / f"{asset_id}.vmd"
+def capture_action_path(asset_id: str) -> Path:
+    return settings.capture_actions_dir / f"{asset_id}.vmd"
 
 
-def write_video_vmd(asset_id: str, data: bytes) -> Path:
-    path = video_vmd_path(asset_id)
+def write_capture_action(asset_id: str, data: bytes) -> Path:
+    path = capture_action_path(asset_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return path
 
 
-def delete_video_vmd(asset_id: str) -> None:
-    path = video_vmd_path(asset_id)
+def delete_capture_action(asset_id: str) -> bool:
+    """删掉捕捉动作；返回是否真的删了文件（幂等）。"""
+    path = capture_action_path(asset_id)
+    if not path.is_file():
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
+def delete_capture_video(rel_path: str) -> None:
+    try:
+        path = resolve_under(settings.storage_root, rel_path)
+    except PathEscapeError:
+        return
     if path.is_file():
         path.unlink(missing_ok=True)
 
 
+# ---- AI 视频的旁挂动作（跟会话目录一起清理） ----
 
-def delete_video(rel_path: str) -> None:
+def ai_video_action_rel_path(session_id: str, video_id: str) -> str:
+    return f"ai_workspace/{session_id}/ai_videos/{video_id}.vmd"
+
+
+def ai_video_action_path(session_id: str, video_id: str) -> Path:
+    return ai_videos_dir(session_id) / f"{video_id}.vmd"
+
+
+def write_ai_video_action(session_id: str, video_id: str, data: bytes) -> Path:
+    path = ai_video_action_path(session_id, video_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+# ---- 旧版路径（只用于启动迁移 / 读取回退，不再写入） ----
+
+
+def legacy_media_video_path(asset_id: str) -> Path:
+    return settings.media_videos_dir / f"{asset_id}.mp4"
+
+
+def legacy_media_action_path(asset_id: str) -> Path:
+    return settings.media_videos_dir / f"{asset_id}.vmd"
+
+
+def legacy_video_rel_path(asset_id: str) -> str:
+    return f"media/videos/{asset_id}.mp4"
+
+
+def legacy_action_rel_path(asset_id: str) -> str:
+    return f"media/videos/{asset_id}.vmd"
+
+
+# 兼容旧调用名：旧代码里 video_rel_path / video_vmd_path 指的是 media/videos。
+# 新代码请用 capture_* / ai_video_*；这里保留以免迁移期间出现 ImportError。
+video_rel_path = legacy_video_rel_path
+video_path = legacy_media_video_path
+video_vmd_rel_path = legacy_action_rel_path
+video_vmd_path = legacy_media_action_path
+
+
+def delete_legacy_media_file(rel_path: str) -> None:
+    """删除旧 media/videos 下的文件（仅迁移 / 兜底清理用）。"""
     try:
         path = resolve_under(settings.storage_root, rel_path)
     except PathEscapeError:

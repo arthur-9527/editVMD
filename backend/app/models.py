@@ -102,13 +102,14 @@ class VmdAsset(Base):
 class VideoAsset(Base):
     """一份参考视频（用户上传 或 AI 生成）。
 
-    ★ 与 VMD 的关系是 **1:1**：一个视频只生成一次动作，生成的 VMD 用
-      `vmd_asset_id` 指向；`UNIQUE` 约束在服务端兜死「不重复生成」。
+    ★ 与 VMD 的关系在语义上是 **1:1**：一个视频只生成一次动作。
+      生成物只进「动作库（L2）」，旁挂在媒体旁边（capture/actions 或会话目录里），
+      **不建 VmdAsset**，所以 `vmd_asset_id` 恒为 null（字段保留兼容旧数据）。
 
     status:
-        queued      —— 刚上传，等待生成
+        queued      —— 刚上传 / 用户删掉了动作，等待生成
         converting  —— 正在动捕 + 转换
-        ready       —— 已生成 VMD（vmd_asset_id 非空）
+        ready       —— 已生成动作（旁挂文件存在）
         failed      —— 生成失败（error 记录原因）
 
     origin:
@@ -121,7 +122,7 @@ class VideoAsset(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     origin: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
-    # storage/media/videos/<id>.mp4 或 ai_workspace/<sid>/ai_videos/<id>.mp4
+    # storage/media/capture/videos/<id>.mp4 或 ai_workspace/<sid>/ai_videos/<id>.mp4
     # （相对 storage 根）
     rel_path: Mapped[str] = mapped_column(String(512), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

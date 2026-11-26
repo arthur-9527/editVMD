@@ -35,6 +35,8 @@ export type WireProject = Omit<Project, "camera" | "library"> & {
     name: string;
     visible?: boolean;
     origin?: "imported" | "derived";
+    /** 由哪段视频捕捉生成（无 = 非视频来源） */
+    sourceVideoId?: string;
     /** 硬盘上的资源 id（无 = 未存盘） */
     assetId?: string;
     /** 上次与硬盘同步时的名字 */
@@ -72,6 +74,9 @@ export function encodeProject(project: Project): WireProject {
       name: entry.name,
       visible: entry.visible,
       origin: entry.origin,
+      // ★ 视频来源：不带的话刷新后视频窗口就找不到「这段视频对应哪条动作」，
+      //   也无法在删除动作时把视频退回待生成。
+      sourceVideoId: entry.sourceVideoId,
       // ★ 这几个字段是「动作 ⇄ 硬盘」的唯一纽带，漏了就等于刷新后判定失真：
       //   savedHash 是「上次同步成功时的 L2 内容指纹」，
       //   savedL3Hash 是「上次同步成功时的 L3 文件字节 sha256」，

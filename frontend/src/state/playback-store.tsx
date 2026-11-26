@@ -23,6 +23,13 @@ import {
   type ReactNode,
 } from "react";
 
+export interface PlayRange {
+  /** 起点帧（含） */
+  start: number;
+  /** 终点帧（含）—— 播到这里自动停止，不循环 */
+  end: number;
+}
+
 export interface PlaybackState {
   /** 当前帧（整数，供 UI 渲染） */
   currentFrame: number;
@@ -30,6 +37,14 @@ export interface PlaybackState {
   playing: boolean;
   /** 时间轴总帧数（随文档变化，供播放循环判断终点） */
   frameCount: number;
+  /**
+   * 一次性播放区间。
+   *
+   * ★ 语义：非 null 时播放循环**不循环**，到 `end` 自动停；
+   *   起点由播放方（视频窗口）显式给定（会先 seek 到 `start`）。
+   *   普通空格 / 时间轴按钮播放会先清掉它，保持原来的循环语义。
+   */
+  playRange: PlayRange | null;
 }
 
 export interface PlaybackActions {
@@ -46,8 +61,15 @@ export interface PlaybackActions {
   setDisplayFrame: (frame: number) => void;
   setPlaying: (playing: boolean) => void;
   setFrameCount: (count: number) => void;
-  /** 播放 / 暂停切换 */
+  /** 播放 / 暂停切换（会清掉一次性区间，恢复循环播放语义） */
   toggle: () => void;
+  /**
+   * 一次性播放：seek 到 `start` 并播到 `end` 自动停。
+   * 视频窗口「播放」按钮用（有动作时先插入编排再从动作起点播）。
+   */
+  playOnce: (start: number, end: number) => void;
+  /** 只清掉一次性区间（不动播放状态） */
+  clearRange: () => void;
 }
 
 interface PlaybackStore {
@@ -59,7 +81,7 @@ interface PlaybackStore {
 }
 
 function createPlaybackStore(): PlaybackStore {
-  let state: PlaybackState = { currentFrame: 0, playing: false, frameCount: 0 };
+  let state: PlaybackState = { currentFrame: 0, playing: false, frameCount: 0, playRange: null };
   const listeners = new Set<() => void>();
   const frameRef = { current: 0 };
 
@@ -90,7 +112,24 @@ function createPlaybackStore(): PlaybackStore {
       set({ ...state, frameCount: count });
     },
     toggle: () => {
-      set({ ...state, playing: !state.playing });
+      // 普通播放 = 循环播放时间轴；一次性区间必须清掉，否则会「播到上次视频末尾就停」。
+      set({ ...state, playing: !state.playing, playRange: null });
+    },
+    playOnce: (start, end) => {
+      const safeStart = Math.max(0, Math.round(start));
+      const safeEnd = Math.max(safeStart + 1, Math.round(end));
+      // 一次 set 完成：帧号 + ref + 区间 + 播放状态，避免中间态触发额外 effect。
+      frameRef.current = safeStart;
+      set({
+        ...state,
+        currentFrame: safeStart,
+        playing: true,
+        playRange: { start: safeStart, end: safeEnd },
+      });
+    },
+    clearRange: () => {
+      if (state.playRange == null) return;
+      set({ ...state, playRange: null });
     },
   };
 

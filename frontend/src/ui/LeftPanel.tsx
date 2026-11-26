@@ -318,7 +318,7 @@ export default function LeftPanel({
               onClick={onToggleVideoWindow}
               checked={videoWindowOpen}
             >
-              打开视频参考窗口
+              打开视频捕捉窗口
             </MenuItem>
           </MenuContent>
         </Menu>

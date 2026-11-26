@@ -34,6 +34,10 @@ from .ai import router as ai_router
 APP_NAME = "editVMD"
 VERSION = "0.1.0"
 
+# 模块级 logger：★ 不要在 lifespan 里写 `import logging` ——
+# 那会让 `logging` 在整个函数内变成局部名，函数顶部引用它就 UnboundLocalError。
+log = logging.getLogger("editvmd.main")
+
 # ★ uvicorn 只配置自己的 logger，不配 root —— 我们的 `editvmd.*` 日志会静默。
 #   这里显式配置 root（幂等；已配置过则 basicConfig 无副作用）。
 #   ★ 推理线程数必须在 import onnxruntime 之前设置，否则会按核数占满 CPU。
@@ -56,6 +60,17 @@ async def lifespan(app: FastAPI):
     wait_for_db()
     init_db()
 
+    # ★ 历史媒体目录迁移：旧版把参考视频 / 生成动作混在 storage/media/videos。
+    #   这里把它们搬到 media/capture/{videos,actions}，AI 的 VMD 搬回会话目录。
+    #   失败只记日志 —— 接口侧仍保留旧路径回退，不阻断启动。
+    try:
+        from .media_layout import migrate_legacy_layout
+
+        stats = migrate_legacy_layout()
+        log.info("[media] 目录迁移完成：%s", stats)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[media] 历史目录迁移失败（继续使用旧路径）：%s", exc)
+
     # ★ 动作生成模型预热（后台线程，不阻塞启动）。
     #   失败只记日志，首次生成会重试；不影响其它功能。
     if settings.t2m_enabled and settings.t2m_warmup:
@@ -64,11 +79,7 @@ async def lifespan(app: FastAPI):
 
             _t2m_warmup()
         except Exception as exc:  # noqa: BLE001
-            import logging
-
-            logging.getLogger("editvmd.main").warning(
-                "[motiongen] 预热启动失败（忽略）: %s", exc
-            )
+            log.warning("[motiongen] 预热启动失败（忽略）: %s", exc)
 
     # ★ 表情生成模型预热（独立引擎；失败只记日志，首次生成会重试）。
     if getattr(settings, "expr_enabled", True) and getattr(
@@ -79,11 +90,7 @@ async def lifespan(app: FastAPI):
 
             _expr_warmup()
         except Exception as exc:  # noqa: BLE001
-            import logging
-
-            logging.getLogger("editvmd.main").warning(
-                "[expressiongen] 预热启动失败（忽略）: %s", exc
-            )
+            log.warning("[expressiongen] 预热启动失败（忽略）: %s", exc)
 
     yield
     # 关闭时停掉所有 AI 会话（子进程），避免 uvicorn --reload 留下僵尸 CLI
@@ -105,7 +112,7 @@ app.add_middleware(
 
 app.include_router(assets.router)
 app.include_router(workspace.router)
-# 参考视频 → 动作：/api/media/videos/*（上传 / 列表 / 预览 / 生成 / 删除）
+# 视频捕捉：/api/media/capture/videos/*（上传 / 列表 / Range 预览 / 生成 / 删除）
 app.include_router(media.router)
 # 侧边栏 AI：REST /api/ai/* + WS /api/ai/ws（SDK 不可用时自动降级，不影响其它接口）
 app.include_router(ai_router.router)

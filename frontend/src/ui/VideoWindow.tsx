@@ -1,21 +1,33 @@
 /**
- * 参考视频窗口（悬浮窗）—— 能力2：参考视频 → 动作。
+ * 视频捕捉窗口（悬浮窗）—— 能力2：参考视频 → 动作。
  *
  * 结构：
  *   1. 视频区：只显示当前选中的一个视频，跟随编辑器播放头同步。
  *   2. 底部三按钮：导入视频 / 播放·暂停 / 生成动作（已生成则置灰）。
  *   3. 视频列表：名称 · 状态 · 删除（删除连带删掉它生成的动作）。
  *
+ * 播放语义（★ 用户明确要求）
+ * -------------------------
+ *   - 视频**已有动作**：点播放先把该动作插入编排（已在编排里则复用），
+ *     从该块起点开始同步播放；播到「动作末帧 / 视频末帧」中较小者自动停。
+ *   - 视频**没有动作**：只播视频，从头播一次，播完自动停；再点从头开始。
+ *   - 无论哪种模式都不循环。
+ *
+ * 加载体验
+ * --------
+ *   后端 `/raw` 支持 HTTP Range（206），浏览器可以边下边播 / 精确 seek；
+ *   这里再叠一层「加载视频… / 缓冲中」遮罩，首帧未就绪时不显示纯黑画面。
+ *
  * 导入前必须确认 5 条拍摄须知。
- * 播放同步：编辑器是唯一时钟 —— 暂停时精确 seek，播放时按误差微调 playbackRate。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Film, Pause, Play, Trash2, Upload, Wand2, X } from "lucide-react";
+import { AlertTriangle, Film, Loader2, Pause, Play, Trash2, Upload, Wand2, X } from "lucide-react";
 
 import { FloatingPanel, clampRect, type Rect } from "./primitives/FloatingPanel.tsx";
 import { cn } from "./cn.ts";
 import { videoRawUrl, type VideoAsset } from "../io/media.ts";
+import { videoFrameCount } from "../lib/video-playback.ts";
 import {
   usePlaybackActions,
   usePlaybackFrameRef,
@@ -56,6 +68,26 @@ export interface VideoWindowProps {
   onUpload: (file: File) => void;
   onConvert: (id: string) => void;
   onDelete: (id: string) => void;
+  /**
+   * 当前视频对应的动作库 clip id（没有 = 未生成 / 动作已被删除）。
+   *
+   * ★ 有值时点播放会走「插入编排并同步播放」；无值则只播放视频。
+   */
+  actionClipId: string | null;
+  /**
+   * 让上层把动作插入编排并从块起点一次性播放。
+   *
+   * @param videoFrames 视频总帧数（30fps 口径）；为 null 时按动作长度播
+   * @returns true = 已接管播放；false = 插入失败，调用方回退到只播视频
+   */
+  onPlayWithAction: (clipId: string, videoFrames: number | null) => boolean;
+  /**
+   * 视频的时间原点在编排里的帧号。
+   *
+   * ★ 视频动作被插入编排时可能不在第 0 帧（前面已有内容），
+   *   此时「编排帧 - syncOffset」才是视频内的帧；不传 = 0。
+   */
+  syncOffset?: number;
   busy?: boolean;
 }
 
@@ -76,12 +108,15 @@ export function VideoWindow({
   onUpload,
   onConvert,
   onDelete,
+  actionClipId,
+  onPlayWithAction,
+  syncOffset = 0,
   busy = false,
 }: VideoWindowProps) {
   const playing = usePlaybackSelector((s) => s.playing);
   const currentFrame = usePlaybackSelector((s) => s.currentFrame);
   const frameRef = usePlaybackFrameRef();
-  const { toggle: togglePlay } = usePlaybackActions();
+  const { setPlaying } = usePlaybackActions();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [rect, setRect] = useState<Rect>(initialRect);
@@ -90,47 +125,95 @@ export function VideoWindow({
   const [guideOpen, setGuideOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /** 无动作时的「只播视频」状态（不受全局 playing 影响） */
+  const [soloPlaying, setSoloPlaying] = useState(false);
+  /**
+   * solo 状态的同步镜像。
+   *
+   * ★ 为什么需要 ref：点「只播视频」时先 `setPlaying(false)` 停掉全局时钟，
+   *   但 React effect 会在事件之后才跑；用同步 ref 让暂停 effect 立刻知道
+   *   「现在是我自己播」，不会反手把刚 play 的视频 pause 掉。
+   */
+  const soloRef = useRef(false);
+  /** 首帧是否已经能显示（用于加载遮罩） */
+  const [hasFrame, setHasFrame] = useState(false);
+  /** 正在缓冲 / seek（视频已出帧时显示小角标，不出帧时显示大遮罩） */
+  const [buffering, setBuffering] = useState(false);
+  const [bufferedPct, setBufferedPct] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const selected = videos.find((v) => v.id === selectedId) ?? null;
+  /**
+   * 实际使用的时间原点：只有「有动作」时才可能非 0。
+   *
+   * ★ 无动作的视频是独立播放 / 跟随编辑器的 0 帧起点；拿别的动作的
+   *   offset 去算它会把画面错位到末尾。
+   */
+  const offset = actionClipId ? Math.max(0, syncOffset) : 0;
+  /** 视频总帧数（30fps 口径）：优先用后端记录的时长，其次读元素 duration */
+  const videoFrames = useCallback((): number | null => {
+    return videoFrameCount(selected?.duration_ms, videoRef.current?.duration ?? null);
+  }, [selected?.duration_ms]);
+
+  // 换视频：重置加载 / 独立播放状态（<video> 本身由 key 重新挂载）
+  useEffect(() => {
+    soloRef.current = false;
+    setSoloPlaying(false);
+    setHasFrame(false);
+    setBuffering(true);
+    setBufferedPct(0);
+    setLoadError(null);
+  }, [selected?.id]);
 
   // ── 同步：视频永远跟随编辑器的播放头（编辑器是唯一时钟）──────────────
   // ★ 为什么不能靠「自己对时」：
   //   video 元素一旦自由播放就会很快漂移；动作播放头由 App 的 rAF 驱动。
   //   所以这里只做一件事：每 ~66ms 读一次 frameRef，把视频往那里拽。
 
-  /** 把视频精确放到某一帧对应的时刻。 */
-  const seekToFrame = useCallback((frame: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    const dur = Number.isFinite(v.duration) ? v.duration : 0;
-    v.currentTime = Math.min(Math.max(0, frame / FPS), dur);
-  }, []);
+  /** 把视频精确放到某一帧对应的时刻（帧号是**编排帧**，内部减掉 offset）。 */
+  const seekToFrame = useCallback(
+    (frame: number) => {
+      const v = videoRef.current;
+      if (!v) return;
+      const dur = Number.isFinite(v.duration) ? v.duration : 0;
+      const local = (frame - offset) / FPS;
+      v.currentTime = Math.min(Math.max(0, local), dur);
+    },
+    [offset],
+  );
 
   // 暂停：播放头是唯一时钟 → 精确 seek（拖播放头 / 单帧步进都靠这条）
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || playing) return;
+    if (!v || playing || soloRef.current) return;
     seekToFrame(currentFrame);
-  }, [currentFrame, playing, selected?.id, seekToFrame]);
+  }, [currentFrame, playing, offset, selected?.id, seekToFrame]);
 
   // 播放 / 暂停边沿：开始播就立刻跟上，停止就暂停
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    // 全局开始播放 → 退出「只播视频」，由编辑器时钟接管
+    if (soloRef.current) {
+      soloRef.current = false;
+      setSoloPlaying(false);
+    }
     if (!playing) {
       v.pause();
       v.playbackRate = 1;
       return;
     }
     const dur = Number.isFinite(v.duration) ? v.duration : Infinity;
-    v.currentTime = Math.min(Math.max(0, frameRef.current / FPS), dur);
+    const local = Math.max(0, (frameRef.current - offset) / FPS);
+    v.currentTime = Math.min(local, dur);
     v.playbackRate = 1;
     // muted 已在 <video> 上默认开 → 自动播放不会被浏览器拒绝
     void v.play().catch(() => {});
-  }, [playing, selected?.id, frameRef]);
+  }, [playing, selected?.id, frameRef, offset]);
 
   // 播放中：伺服循环（采样实际呈现帧 → 微调 playbackRate；越界停在端点）
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || soloRef.current) return;
     const v = videoRef.current;
     if (!v) return;
 
@@ -156,9 +239,15 @@ export function VideoWindow({
       const el = videoRef.current;
       if (!el) return;
       const dur = Number.isFinite(el.duration) ? el.duration : Infinity;
-      const want = frameRef.current / FPS;
+      // 编排帧 → 视频内时间：减掉动作块在编排里的起点
+      const want = (frameRef.current - offset) / FPS;
 
-      // ① 动作比视频长（或循环回绕后瞬间越界）：停在视频末帧，别每 66ms 硬 seek 抖动
+      // ① 还没播到动作起点（或动作比视频长）：停在端点，别每 66ms 硬 seek 抖动
+      if (want < 0) {
+        if (!el.paused) el.pause();
+        if (el.currentTime > 0.01) el.currentTime = 0;
+        return;
+      }
       if (want > dur) {
         if (!el.paused) el.pause();
         if (Math.abs(el.currentTime - dur) > 0.05) el.currentTime = dur;
@@ -198,20 +287,95 @@ export function VideoWindow({
       window.clearInterval(id);
       if (handle && rv.cancelVideoFrameCallback) rv.cancelVideoFrameCallback(handle);
     };
-  }, [playing, selected?.id, frameRef]);
+  }, [playing, selected?.id, frameRef, offset]);
 
-  /** 元数据就绪（首次加载 / 换视频）→ 立即对齐，避免从 0 开始播一瞬再跳。 */
+  /**
+   * 元数据就绪（首次加载 / 换视频）→ 对齐播放头。
+   *
+   * ★ 暂停时若播放头超出视频时长，回到 0（显示首帧），不要 seek 到末尾 ——
+   *   否则用户看到的是黑屏 / 定格末帧（Range 支持前的「黑屏很久」主因之一）。
+   */
   const onLoadedMetadata = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     const dur = Number.isFinite(v.duration) ? v.duration : 0;
     const frame = playing ? frameRef.current : currentFrame;
-    v.currentTime = Math.min(Math.max(0, frame / FPS), dur);
+    let target = (frame - offset) / FPS;
+    if (!playing && target >= dur) target = 0;
+    v.currentTime = Math.min(Math.max(0, target), Math.max(0, dur));
     if (playing) void v.play().catch(() => {});
-  }, [playing, currentFrame, frameRef]);
+  }, [playing, currentFrame, frameRef, offset]);
+
+  /** 首帧可显示：撤掉大遮罩 */
+  const onLoadedData = useCallback(() => {
+    setHasFrame(true);
+    setBuffering(false);
+    setLoadError(null);
+  }, []);
+
+  const onProgress = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(v.duration) || v.duration <= 0 || v.buffered.length === 0) return;
+    const end = v.buffered.end(v.buffered.length - 1);
+    setBufferedPct(Math.max(0, Math.min(1, end / v.duration)));
+  }, []);
+
+  const onVideoError = useCallback(() => {
+    setLoadError("视频加载失败（编码不支持或文件已损坏）");
+    setBuffering(false);
+  }, []);
+
+  /** 独立播放结束：停住，再次点击从头开始 */
+  const onVideoEnded = useCallback(() => {
+    soloRef.current = false;
+    setSoloPlaying(false);
+    setBuffering(false);
+  }, []);
+
+  /**
+   * 播放按钮：
+   *   全局播放中 → 暂停；
+   *   独立播放中 → 暂停视频；
+   *   有动作     → 交给上层「插入编排 + 一次性同步播放」；
+   *   无动作     → 只播视频，从头播一次。
+   */
+  const handlePlayClick = useCallback(() => {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    if (soloPlaying) {
+      soloRef.current = false;
+      setSoloPlaying(false);
+      videoRef.current?.pause();
+      return;
+    }
+    if (selected && actionClipId && onPlayWithAction(actionClipId, videoFrames())) return;
+
+    // 只播视频：先停全局（若有），再从头播一次
+    const v = videoRef.current;
+    if (!v) return;
+    soloRef.current = true;
+    setPlaying(false);
+    setBuffering(false);
+    v.currentTime = 0;
+    v.playbackRate = 1;
+    void v
+      .play()
+      .then(() => {
+        // 竞态：promise 解析前用户已经点了暂停 → 不要回写成「正在播」
+        if (soloRef.current) setSoloPlaying(true);
+        else v.pause();
+      })
+      .catch(() => {
+        soloRef.current = false;
+        setSoloPlaying(false);
+      });
+  }, [playing, soloPlaying, selected, actionClipId, onPlayWithAction, videoFrames, setPlaying]);
 
   const canConvert = !!selected && selected.status !== "converting" && selected.status !== "ready";
   const isGenerated = selected?.status === "ready";
+  const showPlayButton = playing || soloPlaying;
 
   return (
     <FloatingPanel
@@ -226,7 +390,7 @@ export function VideoWindow({
         className="flex h-[26px] shrink-0 cursor-grab items-center gap-2 border-b border-line px-2 active:cursor-grabbing"
       >
         <Film size={12} className="shrink-0 text-accent" />
-        <span className="text-[11.5px] font-semibold text-fg">参考视频</span>
+        <span className="text-[11.5px] font-semibold text-fg">视频捕捉</span>
         <button
           type="button"
           data-no-drag
@@ -248,11 +412,49 @@ export function VideoWindow({
             muted
             preload="auto"
             onLoadedMetadata={onLoadedMetadata}
-            className="h-full w-full object-contain"
+            onLoadedData={onLoadedData}
+            onCanPlay={onLoadedData}
+            onProgress={onProgress}
+            onWaiting={() => setBuffering(true)}
+            onSeeking={() => setBuffering(true)}
+            onSeeked={() => setBuffering(false)}
+            onPlaying={() => setBuffering(false)}
+            onEnded={onVideoEnded}
+            onError={onVideoError}
+            className={cn(
+              "h-full w-full object-contain transition-opacity duration-200",
+              hasFrame ? "opacity-100" : "opacity-0",
+            )}
           />
         ) : (
           <div className="grid h-full place-items-center px-4 text-center text-[11px] text-faint">
             还没有视频。点下方「导入视频」。
+          </div>
+        )}
+
+        {/* 加载遮罩：首帧未就绪时不显示纯黑画面；已出帧时只显示小角标 */}
+        {selected && !hasFrame && !loadError && (
+          <div className="absolute inset-0 grid place-items-center bg-black/60">
+            <div className="flex flex-col items-center gap-1.5 text-dim">
+              <Loader2 size={18} className="animate-spin text-accent" />
+              <span className="text-[11px]">加载视频…</span>
+              {bufferedPct > 0 && (
+                <span className="font-mono text-[10px] tabular-nums text-faint">
+                  {Math.round(bufferedPct * 100)}%
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+        {selected && hasFrame && buffering && !loadError && (
+          <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-dim">
+            <Loader2 size={10} className="animate-spin text-accent" />
+            缓冲中
+          </div>
+        )}
+        {loadError && (
+          <div className="absolute inset-0 grid place-items-center bg-black/70 px-3 text-center text-[11px] text-danger">
+            {loadError}
           </div>
         )}
         {selected?.status === "failed" && selected.error && (
@@ -274,11 +476,17 @@ export function VideoWindow({
         </button>
         <button
           type="button"
-          onClick={togglePlay}
-          className="flex items-center gap-1 rounded border border-line-strong bg-raised px-2 py-1 text-[11px] text-dim transition-colors hover:text-fg"
+          onClick={handlePlayClick}
+          disabled={!selected || !!loadError}
+          title={
+            actionClipId
+              ? "插入编排并从该动作起点同步播放（播完自动停）"
+              : "从头播放这段视频一次"
+          }
+          className="flex items-center gap-1 rounded border border-line-strong bg-raised px-2 py-1 text-[11px] text-dim transition-colors hover:text-fg disabled:opacity-40"
         >
-          {playing ? <Pause size={11} /> : <Play size={11} />}
-          {playing ? "暂停" : "播放"}
+          {showPlayButton ? <Pause size={11} /> : <Play size={11} />}
+          {showPlayButton ? "暂停" : "播放"}
         </button>
         <button
           type="button"

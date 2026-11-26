@@ -16,8 +16,10 @@
       * 不写 storage/vmd/<id>.vmd
       * 不建 VmdAsset 行
     代价是「生成的 VMD 怎么交给前端」—— 前端只轮询 video status，
-    所以把它**旁挂**在视频旁边（media/videos/<video_id>.vmd）：
-      * 不污染 vmd/ 存盘区，也不会出现在「导入 VMD」列表里；
+    所以把它**旁挂**在视频旁边：
+      * 视频捕捉：storage/media/capture/actions/<video_id>.vmd
+      * AI 视频：  storage/ai_workspace/<session_id>/ai_videos/<video_id>.vmd
+      * 都不污染 vmd/ 存盘区，也不出现在「导入 VMD」列表里；
       * 前端按 video_id 拉字节 → parseVmd → 动作库（显示「未存盘」）。
     用户想长期保存时才手动点「存盘」，那一步才写进 storage/vmd（L3）。
 
@@ -36,7 +38,7 @@ from typing import TypedDict
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..storage import ai_tmp_dir, write_video_vmd
+from ..storage import ai_tmp_dir, write_ai_video_action, write_capture_action
 from ..vmd_meta import parse_vmd_meta
 from . import ai_videos, animchar, glb2vmd, minimax
 from .errors import MediaError
@@ -141,11 +143,11 @@ def video_file_to_vmd(
 ) -> VmdResult:
     """已有 mp4 → VMD。
 
-    ★ 产物旁挂到 `media/videos/<video_id>.vmd`（不进 storage/vmd）。
+    ★ 产物旁挂到 `media/capture/actions/<video_id>.vmd`（不进 storage/vmd）。
       调用方（routers/media._run_convert）据此回填 VideoAsset 状态并 commit。
     """
     data = _video_to_vmd_bytes(session, video_path)
-    write_video_vmd(video_id, data)
+    write_capture_action(video_id, data)
     result = _result(name, data)
     log.info("[pipeline] 视频→VMD（旁挂）video=%s frames=%s", video_id, result["frame_count"])
     return result
@@ -197,8 +199,8 @@ def text_to_vmd(
         raise
 
     result = _result(name, vmd_data)
-    # 旁挂到视频旁边（不进 storage/vmd），并把视频标记为 ready
-    write_video_vmd(video.id, vmd_data)
+    # 旁挂到会话目录（不进 storage/vmd），并把视频标记为 ready
+    write_ai_video_action(session_id, video.id, vmd_data)
     ai_videos.mark_ready(session, video, result["frame_count"])
     session.commit()
     return result, video
@@ -255,7 +257,7 @@ def reference_to_vmd(
         raise
 
     result = _result(name, vmd_data)
-    write_video_vmd(video.id, vmd_data)
+    write_ai_video_action(session_id, video.id, vmd_data)
     ai_videos.mark_ready(session, video, result["frame_count"])
     session.commit()
     return result, video

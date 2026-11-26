@@ -5,7 +5,8 @@
 AI 生成的视频有**三重身份**：
     ① 一份 mp4 文件（落在**会话专属目录**里，可被模型当成参考视频回传）；
     ② 一条 `video_assets` 行（带 `session_id`，用于删除会话时连带清理）；
-    ③ 一份 VMD 的**字节来源**（旁挂在 media/videos/<id>.vmd，不随会话删除）。
+    ③ 一份 VMD 的**字节来源**（旁挂在 `ai_workspace/<session_id>/ai_videos/<id>.vmd`，
+       跟会话目录一起清理；不会进入视频捕捉的 capture/actions 目录）。
 
 这三件事以前散落在 pipeline / router / manager 里，容易漏。这里统一收口：
 
@@ -116,8 +117,8 @@ def mark_ready(
     """动捕完成后回填：status=ready + frame_count。
 
     ★ 不再写 `vmd_asset_id`：生成物只进「动作库（L2）」，不是一份 storage/vmd
-      资源行。VMD 字节**旁挂**在视频旁边（media/videos/<id>.vmd），前端按
-      video_id 拉取。`vmd_asset_id` 恒为 null。
+      资源行。VMD 字节**旁挂**在会话目录里（`ai_videos/<id>.vmd`），前端由
+      AI 工具直接拿到字节并入库；`vmd_asset_id` 恒为 null。
     """
     video.status = "ready"
     video.error = None
@@ -209,16 +210,17 @@ def _validate_video(path: Path) -> Path:
 def delete_by_session(session_id: str) -> dict:
     """删除会话时调用：删该会话的 video_assets 行 + 整个会话沙箱目录。
 
-    ★ 只删视频，**不删 VMD**（`storage/vmd/*.vmd` 与用户动作库里的片段保留）。
-    独立开会话（不接收外部 Session），返回统计信息方便日志核对。
+    ★ 视频与它的旁挂动作都在会话目录里（`ai_videos/<id>.mp4|.vmd`），
+      所以 rmtree 会把它们一起清掉；已经导入「动作库（L2）」的片段
+      是前端内存/草稿里的内容，不受影响。
+      独立开会话（不接收外部 Session），返回统计信息方便日志核对。
     """
     if not session_id:
-        return {"videos": 0, "vmd_kept": 0, "dir_removed": False}
+        return {"videos": 0, "actions_removed": 0, "dir_removed": False}
 
     from ..db import SessionLocal
 
     removed = 0
-    vmd_kept = 0
     try:
         with SessionLocal() as db:
             rows = (
@@ -227,7 +229,6 @@ def delete_by_session(session_id: str) -> dict:
                 .all()
             )
             removed = len(rows)
-            vmd_kept = sum(1 for r in rows if r.vmd_asset_id)
             for row in rows:
                 db.delete(row)
             db.commit()
@@ -241,10 +242,10 @@ def delete_by_session(session_id: str) -> dict:
         log.warning("[ai_videos] 删除会话目录失败 %s: %s", session_id, exc)
 
     log.info(
-        "[ai_videos] 会话 %s 清理完成：删视频 %d 条（保留 VMD %d 份），目录删除=%s",
-        session_id, removed, vmd_kept, had_dir,
+        "[ai_videos] 会话 %s 清理完成：删视频 %d 条，目录删除=%s",
+        session_id, removed, had_dir,
     )
-    return {"videos": removed, "vmd_kept": vmd_kept, "dir_removed": had_dir}
+    return {"videos": removed, "actions_removed": removed, "dir_removed": had_dir}
 
 
 def list_by_session(session_id: str, limit: int = 50) -> list[dict]:

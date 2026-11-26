@@ -82,6 +82,7 @@ import {
   uploadVmd,
 } from "./io/assets.ts";
 import { clipFingerprint } from "./lib/clip-hash.ts";
+import { oneShotEndFrame } from "./lib/video-playback.ts";
 import { bytesToBase64 } from "./io/api.ts";
 import { loadWorkspace, saveWorkspace, seedRevision } from "./io/workspace.ts";
 import { AssetPicker } from "./ui/left/AssetPicker.tsx";
@@ -106,6 +107,7 @@ import { VideoWindow } from "./ui/VideoWindow.tsx";
 import {
   convertVideo,
   deleteVideo,
+  discardVideoAction,
   listVideos,
   uploadReferenceVideo,
   videoVmdUrl,
@@ -138,6 +140,8 @@ import {
   normalizeLanes,
   offsetOf,
   outOf,
+  placementEnd,
+  placementsUsing,
   projectContentEnd,
   removePlacements,
   removeTrack,
@@ -145,6 +149,7 @@ import {
   setTrackMute,
   setTrackSolo,
   trimPlacement,
+  type Placement,
   type PlacementId,
   type Project,
   normalizeLibraryNames,
@@ -233,16 +238,20 @@ function StudioShell() {
     linkLibraryClip,
     markLibraryClipRenamed,
     detachAssetFromLibrary,
+    setLibraryClipSource,
   } = useStudioActions();
 
   const currentFrame = usePlaybackSelector((s) => s.currentFrame);
   const playing = usePlaybackSelector((s) => s.playing);
+  const playRange = usePlaybackSelector((s) => s.playRange);
   const {
     setCurrentFrame,
     setDisplayFrame,
     setPlaying,
     setFrameCount,
     toggle: togglePlay,
+    playOnce,
+    clearRange,
   } = usePlaybackActions();
   const currentFrameRef = usePlaybackFrameRef();
 
@@ -394,12 +403,14 @@ function StudioShell() {
   /** 悬浮窗里当前预览的视频（一次只开一个） */
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   /**
-   * 已自动导入到动作库的**视频 id**（防止轮询重复导入）。
+   * 正在拉取 / 已尝试拉取视频动作的 video id（防止轮询重复请求）。
    *
-   * ★ 生成物只进动作库（L2），不再有 vmd_asset_id；去重键改用 video.id。
+   * ★ 它只是**并发去重**，真正的「已经导入过」判据是动作库条目的
+   *   `sourceVideoId`（持久化在草稿 / 工作区里）—— 只在内存里记一份的话，
+   *   刷新页面后会把同一视频的动作重复导入一遍。
    */
   const importedVideoRef = useRef<Set<string>>(new Set());
-  /** 生成动作已经进过动作库的库条目 id（video.id → LibraryClip.id），删除视频时据此移除 */
+  /** 视频 id → 动作库条目 id（当前会话的快速索引；可从 library.sourceVideoId 重建） */
   const videoLibraryRef = useRef<Map<string, string>>(new Map());
 
   /**
@@ -501,11 +512,14 @@ function StudioShell() {
   /**
    * ★ 没有内容时必须停播：否则 rAF 循环 `acc % 0` 得到 NaN，
    *   播放头变成 NaN、时间轴红线消失、引擎 seek(NaN)。
+   *
+   * ★ 但「视频窗口一次性播放」是例外：动作刚插入编排的那一帧，
+   *   arrangementEnd 可能还没随 React 重渲染更新，不能把它当空内容停掉。
    */
   useEffect(() => {
-    if (canPlay) return;
+    if (canPlay || playRange) return;
     setPlaying(false);
-  }, [canPlay, setPlaying]);
+  }, [canPlay, playRange, setPlaying]);
 
   /**
    * ★ 不再把播放头钳回内容长度：红线可以停在任意可见帧（用于在空白帧
@@ -531,22 +545,45 @@ function StudioShell() {
   useEffect(() => {
     if (!playing) return;
     const total = timelineTotal;
+    // ★ 有一次性区间时，长度以区间为准（视频窗口插入动作后从块起点播到终点）；
+    //   没有区间时仍按当前视图的循环长度。
+    const range = playRange;
     // ★ 没有内容就绝不启动循环：`acc % 0` 是 NaN，播放头会变成 NaN
-    //   并一路污染时间轴红线与引擎 seek。
-    if (!(total > 0)) {
+    //   并一路污染时间轴红线与引擎 seek。一次性区间允许在编排尚未重算时先播。
+    if (!(total > 0) && !range) {
       setPlaying(false);
       return;
     }
     let raf = 0;
     let last: number | null = null;
-    let acc = currentFrameRef.current;
+    let acc = range ? range.start : currentFrameRef.current;
+    if (range) {
+      // 区间播放必须从起点开始（视频窗口已 seek 过，这里再保证一次）
+      currentFrameRef.current = acc;
+      getEngineModel()?.seek(frameToSeconds(acc));
+      setDisplayFrame(Math.round(acc));
+    }
 
     const tick = (now: number) => {
       if (last !== null) {
         const dt = (now - last) / 1000;
         acc += dt * FPS;
-        // 到末尾循环回 0（MMD 动作默认循环）
-        if (acc >= total) acc = acc % total;
+
+        if (range) {
+          // 一次性播放：到终点即停，不循环
+          if (acc >= range.end) {
+            acc = range.end;
+            currentFrameRef.current = acc;
+            getEngineModel()?.seek(frameToSeconds(acc));
+            setDisplayFrame(Math.round(acc));
+            setPlaying(false);
+            return;
+          }
+        } else if (acc >= total) {
+          // 到末尾循环回 0（MMD 动作默认循环）
+          acc = acc % total;
+        }
+
         currentFrameRef.current = acc;
         getEngineModel()?.seek(frameToSeconds(acc));
         setDisplayFrameSafely(acc);
@@ -562,7 +599,7 @@ function StudioShell() {
       setDisplayFrame(Math.round(frame));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, timelineTotal, getEngineModel, currentFrameRef, setDisplayFrame]);
+  }, [playing, timelineTotal, playRange, getEngineModel, currentFrameRef, setDisplayFrame, setPlaying]);
 
   // ---------------------------------------------------------------- 编辑 → 引擎热更新
   const hasClip = clip.frameCount > 0 || Object.keys(clip.boneTracks).length > 0;
@@ -2056,6 +2093,15 @@ function StudioShell() {
     if (videoWindowOpen) void refreshVideos();
   }, [videoWindowOpen, refreshVideos]);
 
+  /**
+   * 切换视频时停止一次性的同步播放：
+   * 旧视频的动作块起点（syncOffset）对新视频没有意义，继续播只会错位。
+   */
+  useEffect(() => {
+    setPlaying(false);
+    clearRange();
+  }, [selectedVideoId, setPlaying, clearRange]);
+
   /** 有「待生成 / 生成中」的视频时，每 3s 轮询一次 */
   useEffect(() => {
     if (!videoWindowOpen) return;
@@ -2083,31 +2129,58 @@ function StudioShell() {
   /**
    * 某个视频转换完成（ready）→ 拉取它生成的 VMD **字节**加入动作库。
    *
-   * ★ 生成物只进「动作库（L2）」：后端把产物旁挂在 media/videos/<id>.vmd，
-   *   这里按 video.id 拉字节 → parseVmd → importLibraryClip（无 assetId = 未存盘）。
-   *   去重键用 video.id，避免轮询重复导入。
+   * ★ 生成物只进「动作库（L2）」：后端把产物旁挂在
+   *   `media/capture/actions/<id>.vmd`，这里按 video.id 拉字节 → parseVmd →
+   *   importLibraryClip（无 assetId = 未存盘）。
+   * ★ 去重判据是库条目的 `sourceVideoId`（持久化），所以刷新后不会重复导入；
+   *   `importedVideoRef` 只用于防止同一轮轮询并发请求。
    */
   useEffect(() => {
     for (const v of videos) {
       if (v.status !== "ready") continue;
+
+      // 动作库里已经有一条来自这段视频的动作 → 只补索引，绝不重复导入
+      const existing = project.library.find((c) => c.sourceVideoId === v.id);
+      if (existing) {
+        videoLibraryRef.current.set(v.id, existing.id);
+        importedVideoRef.current.delete(v.id);
+        continue;
+      }
+
+      // ★ 升级回填：旧版本导入的视频动作没有 sourceVideoId。
+      //   名字**唯一**命中一条非派生动作时认作它的来源，避免重复导入一份。
+      //   有歧义（同名不止一条）就不猜，走正常导入。
+      if (v.name) {
+        const candidates = project.library.filter(
+          (c) => c.origin !== "derived" && !c.sourceVideoId && c.name === v.name,
+        );
+        if (candidates.length === 1) {
+          setLibraryClipSource(candidates[0].id, v.id);
+          videoLibraryRef.current.set(v.id, candidates[0].id);
+          continue;
+        }
+      }
+
       if (importedVideoRef.current.has(v.id)) continue;
       importedVideoRef.current.add(v.id);
       void (async () => {
         try {
           const res = await fetch(videoVmdUrl(v.id));
-          if (!res.ok) return;
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buffer = await res.arrayBuffer();
           const parsed = parseVmd(buffer);
           const name = v.name?.trim() || "视频动作";
-          const clipId = importLibraryClip(name, parsed.clip);
+          const clipId = importLibraryClip(name, parsed.clip, undefined, { videoId: v.id });
           videoLibraryRef.current.set(v.id, clipId);
           setStatus("ready", `已加入动作库：${name}（${parsed.clip.frameCount} 帧，未存盘）`);
         } catch (err) {
+          // 失败后允许下一轮轮询重试（不要把失败也记成「已导入」）
+          importedVideoRef.current.delete(v.id);
           console.warn("[editVMD] 拉取视频动作失败：", err);
         }
       })();
     }
-  }, [videos, importLibraryClip, setStatus]);
+  }, [videos, project.library, importLibraryClip, setLibraryClipSource, setStatus]);
 
   /** 导入视频（外部文件 → 系统存储） */
   const handleUploadVideo = useCallback(
@@ -2143,21 +2216,66 @@ function StudioShell() {
     [setStatus],
   );
 
+  /** 视频 id → 动作库条目（来源字段持久化在 library 里，刷新后仍找得到） */
+  const findVideoClipEntry = useCallback(
+    (videoId: string) => project.library.find((c) => c.sourceVideoId === videoId) ?? null,
+    [project.library],
+  );
+
   /**
-   * 删除视频：后端连带删除旁挂的生成动作文件，前端同步把该视频生成的动作**移出动作库**。
+   * 从动作库删除条目（ClipLibrary 的删按钮 / Delete）。
    *
-   * ★ 生成物只进动作库（L2），没有 storage/vmd 资源行；这里按 video.id 记下的
-   *   库条目 id 移除（videoLibraryRef），不依赖 vmd_asset_id。
+   * ★ 若这条动作来自视频捕捉：删除 = 「这份动作没有了」——调后端丢弃
+   *   旁挂 VMD 并把视频状态退回 queued，生成按钮重新可用。
+   */
+  const handleRemoveLibraryClip = useCallback(
+    async (clipId: string) => {
+      const entry = project.library.find((c) => c.id === clipId);
+      const videoId = entry?.sourceVideoId;
+      if (videoId) {
+        // 这条动作若正在被视频窗口同步播放，先停掉（播放对象马上就不存在了）
+        setPlaying(false);
+        clearRange();
+        // 乐观 UI：先把视频置回「待生成」，失败也不阻塞库条目的删除
+        setVideos((prev) =>
+          prev.map((v) =>
+            v.id === videoId ? { ...v, status: "queued", frame_count: null, error: null } : v,
+          ),
+        );
+        videoLibraryRef.current.delete(videoId);
+        importedVideoRef.current.delete(videoId);
+        try {
+          await discardVideoAction(videoId);
+          setStatus("ready", "已删除视频动作，可重新「生成动作」");
+        } catch (err) {
+          setStatus(
+            "error",
+            `已从动作库删除，但后端状态未重置：${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      removeLibraryClip(clipId);
+    },
+    [project.library, removeLibraryClip, setPlaying, clearRange, setStatus],
+  );
+
+  /**
+   * 删除视频：后端连带删除生成的动作文件，前端同步把该视频生成的动作**移出动作库**。
+   *
+   * ★ 直接从 library 按 `sourceVideoId` 找条目（不依赖只活在内存的 ref，
+   *   刷新后依然正确）。
    */
   const handleDeleteVideo = useCallback(
     async (id: string) => {
       try {
         const r = await deleteVideo(id);
-        const clipId = videoLibraryRef.current.get(id);
-        if (clipId) {
-          removeLibraryClip(clipId);
-          videoLibraryRef.current.delete(id);
+        const entry = project.library.find((c) => c.sourceVideoId === id);
+        if (entry) {
+          setPlaying(false);
+          clearRange();
+          removeLibraryClip(entry.id);
         }
+        videoLibraryRef.current.delete(id);
         importedVideoRef.current.delete(id);
         setVideos((prev) => prev.filter((v) => v.id !== id));
         if (selectedVideoId === id) setSelectedVideoId(null);
@@ -2166,8 +2284,78 @@ function StudioShell() {
         setStatus("error", err instanceof Error ? err.message : String(err));
       }
     },
-    [removeLibraryClip, selectedVideoId, setStatus],
+    [project.library, removeLibraryClip, selectedVideoId, setPlaying, clearRange, setStatus],
   );
+
+  /**
+   * 视频窗口「播放」（该视频已有动作）：
+   *
+   *   ① 动作未在编排里 → 追加到最下方轨道末尾；
+   *   ② 切到编排视图，播放头跳到该块起点；
+   *   ③ 一次性播到「块末帧」与「视频末帧」的较小者，播完自动停。
+   *
+   * 返回 true 表示已接管播放；false 表示没有可用动作（调用方应改为只播视频）。
+   */
+  const handleVideoActionPlay = useCallback(
+    (clipId: string, videoFrames: number | null): boolean => {
+      const entry = clipById(project, clipId);
+      if (!entry) return false;
+
+      let nextProject = project;
+      let placement: Placement | null = placementsUsing(project, clipId)[0] ?? null;
+      if (!placement) {
+        const trackId = project.tracks[project.tracks.length - 1]?.id;
+        if (!trackId) {
+          setStatus("error", "没有可用轨道，无法插入视频动作");
+          return false;
+        }
+        const r = appendPlacement(project, trackId, clipId);
+        if (!r.placementId) {
+          setStatus("error", "这条轨上没有能放下的空隙");
+          return false;
+        }
+        nextProject = r.project;
+        placement = placementsUsing(nextProject, clipId).find((p) => p.id === r.placementId) ?? null;
+      }
+      if (!placement) return false;
+
+      const start = placement.start;
+      // 块可能被裁过头（in > 0）：视频从 in 对应的时间开始，剩余长度也要扣掉 in
+      const videoRemaining =
+        videoFrames != null ? Math.max(1, videoFrames - placement.in) : null;
+      const end = oneShotEndFrame(
+        start,
+        placementEnd(placement, entry.clip),
+        videoRemaining,
+      );
+
+      applyProject(nextProject, "载入视频动作到编排");
+      setTimelineMode("arrange");
+      setSelectedPlacements([placement.id]);
+      seekTo(start);
+      playOnce(start, Math.max(start + 1, end));
+      setStatus("ready", `已插入编排，从第 ${start} 帧同步播放（播完自动停）`);
+      return true;
+    },
+    [project, applyProject, seekTo, playOnce, setStatus],
+  );
+
+  /**
+   * 当前选中视频对应动作 / 它在编排里的时间原点。
+   *
+   * ★ syncOffset 取 placement 的 `offsetOf`（= start - in），不是 start：
+   *   块被裁过头时，编排帧 start 对应的是 clip 的第 in 帧，
+   *   视频时间 =（编排帧 - offset）/ 30。拿 start 当原点会错位 in 帧。
+   */
+  const selectedVideoClipId = selectedVideoId
+    ? (findVideoClipEntry(selectedVideoId)?.id ?? null)
+    : null;
+  const videoSyncOffset = selectedVideoClipId
+    ? (() => {
+        const p = placementsUsing(project, selectedVideoClipId)[0];
+        return p ? offsetOf(p) : 0;
+      })()
+    : 0;
 
   duplicatePlacementRef.current = handlePlacementDuplicate;
 
@@ -2757,7 +2945,7 @@ function StudioShell() {
               library={project.library}
               activeId={activeClipId}
               onLoad={handleLibraryLoad}
-              onRemove={removeLibraryClip}
+              onRemove={handleRemoveLibraryClip}
               onRename={handleRenameClipToDisk}
               onSaveToDisk={handleSaveClipToDisk}
               onImport={() => {
@@ -3033,6 +3221,9 @@ function StudioShell() {
           onUpload={handleUploadVideo}
           onConvert={handleConvertVideo}
           onDelete={handleDeleteVideo}
+          actionClipId={selectedVideoClipId}
+          onPlayWithAction={(clipId, videoFrames) => handleVideoActionPlay(clipId, videoFrames)}
+          syncOffset={videoSyncOffset}
           busy={busy}
         />
       )}

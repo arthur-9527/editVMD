@@ -207,6 +207,7 @@ export interface StudioActions {
     name: string,
     clip: Clip,
     disk?: { assetId: string; savedName: string; savedHash?: string; savedL3Hash?: string },
+    source?: { videoId?: string },
   ) => ClipId;
   /**
    * 把某条动作与硬盘文件的关联写回（存盘成功后调用）。
@@ -251,6 +252,15 @@ export interface StudioActions {
    */
   replaceClipById: (id: ClipId, clip: Clip, label?: string) => void;
 
+  /**
+   * 记录 / 清除「这条动作来自哪段视频捕捉」。
+   *
+   * ★ 为什么需要单独一个入口：升级前导入的视频动作没有 `sourceVideoId`，
+   *   刷新后视频窗口会认不出它、再次导入一份；启动时按名字做一次
+   *   宽松回填（名字唯一命中才认），走这里写入。
+   *   只改元信息，不写历史（不是一次编辑动作）。
+   */
+  setLibraryClipSource: (id: ClipId, videoId: string | undefined) => void;
   /** 从库里删除一份动作及其全部 placement */
   removeLibraryClip: (id: ClipId) => void;
   /** 重命名库内片段 */
@@ -500,7 +510,7 @@ function createStudioStore(): StudioStore {
       });
     },
 
-    importLibraryClip: (name, clip, disk) => {
+    importLibraryClip: (name, clip, disk, source) => {
       // ★ 先把「当前正在编辑的那份」的最新内容写回库，再追加新条目。
       //   直接拿 state.project 去 addClip 会用库里的旧快照覆盖掉
       //   用户刚改完、还没 commit 的关键帧（表现为导入后当前动作回退）。
@@ -526,10 +536,21 @@ function createStudioStore(): StudioStore {
             ),
           }
         : added.project;
+      // ★ 视频来源：跟着库条目一起持久化（serialize.ts 会写进草稿 / 工作区）。
+      //   withSource 只在需要时换新 project，避免无谓的对象分配。
+      const withSource =
+        source?.videoId == null
+          ? project
+          : {
+              ...project,
+              library: project.library.map((c) =>
+                c.id === clipId ? { ...c, sourceVideoId: source.videoId } : c,
+              ),
+            };
       coalesce = null;
       set({
         ...state,
-        project,
+        project: withSource,
         // ★ 批次中不逐步压栈（AI 一次加多个片段 → 一步撤回）
         past: state.batch
           ? state.past
@@ -591,6 +612,18 @@ function createStudioStore(): StudioStore {
         future: [],
         lastLabel: text,
       });
+    },
+
+    setLibraryClipSource: (id, videoId) => {
+      const base = projectWithActiveClip(state, state.clip);
+      let changed = false;
+      const library = base.library.map((c) => {
+        if (c.id !== id || c.sourceVideoId === videoId) return c;
+        changed = true;
+        return { ...c, sourceVideoId: videoId };
+      });
+      if (!changed) return;
+      set({ ...state, project: { ...base, library } });
     },
 
     removeLibraryClip: (id) => {

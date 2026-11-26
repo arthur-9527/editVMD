@@ -161,12 +161,36 @@ class Settings(BaseSettings):
 
     @property
     def media_dir(self) -> Path:
-        """媒体根目录：images / videos / glb 都放这下面。"""
+        """媒体根目录：capture / glb / pose.png 都放这下面。"""
         return self.storage_root / "media"
 
     @property
     def media_videos_dir(self) -> Path:
+        """**旧版**参考视频目录，仅用于历史数据迁移兼容（见 media_layout.py）。
+
+        ★ 新数据一律写 `capture_videos_dir`，不要再往这里写。
+        """
         return self.media_dir / "videos"
+
+    # ---- 视频捕捉（参考视频 → 动作）独立目录 ----
+    #
+    # ★ 与 AI 的 `ai_workspace/<session_id>/ai_videos/` 彻底分开：
+    #   捕捉窗口的列表 / 接口只认这一份目录，AI 生成的视频与动作
+    #   不会混进「参考视频」列表。
+
+    @property
+    def capture_dir(self) -> Path:
+        return self.media_dir / "capture"
+
+    @property
+    def capture_videos_dir(self) -> Path:
+        """参考视频窗口上传的 mp4。"""
+        return self.capture_dir / "videos"
+
+    @property
+    def capture_actions_dir(self) -> Path:
+        """视频捕捉生成的动作（旁挂 VMD，只进动作库 L2）。"""
+        return self.capture_dir / "actions"
 
     @property
     def media_glb_dir(self) -> Path:
@@ -230,6 +254,8 @@ class Settings(BaseSettings):
         self.ai_workdir.mkdir(parents=True, exist_ok=True)
         self.media_dir.mkdir(parents=True, exist_ok=True)
         self.media_videos_dir.mkdir(parents=True, exist_ok=True)
+        self.capture_videos_dir.mkdir(parents=True, exist_ok=True)
+        self.capture_actions_dir.mkdir(parents=True, exist_ok=True)
         self.media_glb_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_first_frame()
 
